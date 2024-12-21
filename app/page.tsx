@@ -1,101 +1,223 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useCallback } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+import Alert from "@/components/alert";
+import CharacterList from "@/components/character-list";
+import Loading from "@/components/loading";
+
+import { fetchCharacters } from "@/lib/api";
+import { generateIcalData } from "@/lib/ical";
+import { saveFileToOPFS } from "@/lib/opfs";
+import { Character, IcalFile } from "@/types/types";
+import { useIcal } from "@/hooks/useIcal";
+
+const Home = () => {
+  const [titleName, setTitleName] = useState("");
+  const [characters, setCharacters] = useState<Character[] | null>(null);
+  const [selectedCharacters, setSelectedCharacters] = useState<
+    Record<string, boolean>
+  >({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertTitle, setAlertTitle] = useState("");
+  const [alertDescription, setAlertDescription] = useState<
+    string | undefined
+  >();
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const { downloadIcal } = useIcal();
+
+  const handleCloseAlert = () => {
+    setAlertOpen(false);
+  };
+
+  const handleFetchCharacters = async () => {
+    if (titleName === "") {
+      setAlertTitle("Enter Title");
+      setAlertOpen(true);
+      return;
+    }
+
+    setIsLoading(true);
+    const data = await fetchCharacters(titleName, sourceUrl);
+    if (!data) {
+      setAlertTitle("Failed to get characters' data");
+      setAlertOpen(true);
+      setIsLoading(false);
+      return;
+    }
+
+    setCharacters(data.characters);
+    setIsLoading(false);
+    setSelectedCharacters(() =>
+      data.characters.reduce(
+        (acc, curr) => ({ ...acc, [curr.name]: false }),
+        {},
+      ),
+    );
+  };
+
+  const handleCharacterSelect = useCallback(
+    (name: string, checked: boolean) => {
+      setSelectedCharacters((prev) => ({ ...prev, [name]: checked }));
+    },
+    [],
+  );
+
+  const handleCharacterChange = (updatedCharacter: Character) => {
+    if (!characters) return;
+    const updatedCharacters = characters.map((character) =>
+      character.name === updatedCharacter.name ? updatedCharacter : character,
+    );
+    setCharacters(updatedCharacters);
+  };
+
+  const handleCharacterAdd = (newCharacter: Character) => {
+    if (!characters) return;
+    setCharacters([...characters, newCharacter]);
+    setSelectedCharacters((prev) => ({ ...prev, [newCharacter.name]: false }));
+  };
+
+  const handleCharacterDelete = (deleteCharacter: Character) => {
+    if (!characters) return;
+    const updateCharacters = characters.filter(
+      (character) => character.name !== deleteCharacter.name,
+    );
+    setCharacters(updateCharacters);
+    setSelectedCharacters((prev) => {
+      const { [deleteCharacter.name]: removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const handleGenerateIcal = async () => {
+    if (!characters || characters.length === 0) {
+      setAlertTitle("Choose at least one");
+      setAlertOpen(true);
+      return;
+    }
+
+    for (const c of characters) {
+      if (new Date(c.birthday) === null) {
+        setAlertTitle("Set birthday");
+        setAlertOpen(true);
+        return;
+      }
+    }
+
+    const selected = characters.filter(
+      (character) => selectedCharacters[character.name],
+    );
+
+    if (selected.length === 0) {
+      setAlertTitle("Choose at least one");
+      setAlertOpen(true);
+      return;
+    }
+    setIsLoading(true);
+
+    const icalData = generateIcalData(selected, year);
+
+    const icalFile: IcalFile = {
+      name: `${titleName}_calendar.ical`,
+      content: icalData,
+    };
+
+    const saveResult = await saveFileToOPFS(icalFile);
+    if (!saveResult) {
+      setAlertTitle("Failed to save iCal file");
+      setAlertOpen(true);
+      setIsLoading(false);
+      return;
+    }
+
+    await downloadIcal(icalFile);
+    setIsLoading(false);
+  };
+
+  const handleYearChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value, 10);
+    if (isNaN(value)) {
+      setYear(new Date().getFullYear());
+      return;
+    }
+    setYear(value);
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
+    <div className="container flex flex-col gap-4 p-4">
+      <h1 className="text-2xl font-bold">
+        A Tool for generating Character Birthdays Calendar <br />
+        <span className="text-sm">
+          powered by Gemini 2.0 Flash Experimental
+        </span>
+      </h1>
+      <div>
+        <Label htmlFor="title">Title*</Label>
+        <Input
+          id="title"
+          type="text"
+          value={titleName}
+          onChange={(e) => setTitleName(e.target.value)}
+          placeholder="Enter a title"
         />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+      </div>
+      <div>
+        <Label htmlFor="source">Source URL</Label>
+        <Input
+          type="text"
+          id="source"
+          placeholder="https://wikipedia.org/~"
+          value={sourceUrl}
+          onChange={(e) => setSourceUrl(e.target.value)}
+        />
+      </div>
+      <div>
+        <Label htmlFor="year">Year</Label>
+        <Input
+          type="number"
+          id="year"
+          value={year}
+          onChange={handleYearChange}
+        />
+      </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <Button onClick={handleFetchCharacters} disabled={isLoading}>
+        Search Characters by AI
+      </Button>
+      {isLoading && <Loading />}
+
+      {characters && (
+        <CharacterList
+          characters={characters}
+          selectedCharacters={selectedCharacters}
+          onCharacterSelect={handleCharacterSelect}
+          onCharacterChange={handleCharacterChange}
+          onCharacterAdd={handleCharacterAdd}
+          onCharacterDelete={handleCharacterDelete}
+          year={year}
+        />
+      )}
+      <Button
+        onClick={handleGenerateIcal}
+        disabled={isLoading || characters === null || characters?.length === 0}
+      >
+        Generate iCal Calendar
+      </Button>
+      <Alert
+        open={alertOpen}
+        title={alertTitle}
+        description={alertDescription}
+        onOpenChange={handleCloseAlert}
+      />
     </div>
   );
-}
+};
+
+export default Home;
